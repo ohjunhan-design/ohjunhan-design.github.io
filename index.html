@@ -6,6 +6,8 @@
 <title>DrivePilot</title>
 <style>
   html,body{margin:0;height:100%;background:#0b0d10;color:#fff;font-family:-apple-system,"Noto Sans KR",sans-serif;overflow:hidden}
+  #view{position:absolute;inset:0;overflow:hidden}
+  #wrap{position:absolute;transform-origin:50% 50%;transition:transform .7s linear}
   #map{position:absolute;inset:0}
   #hud{position:absolute;left:14px;top:14px;z-index:10;background:rgba(10,12,16,.82);border-radius:18px;padding:12px 18px 10px;min-width:150px;text-align:center}
   #v{font-size:min(15vmin,120px);font-weight:700;line-height:1}
@@ -16,47 +18,56 @@
   #d{font-size:min(7vmin,52px);font-weight:700;color:#7cff9e;line-height:1.1}
   #r{font-size:min(2.8vmin,20px);color:#aab}
   #st{position:absolute;right:14px;top:14px;z-index:10;width:14px;height:14px;border-radius:50%;background:#555}
+  #compass{position:absolute;right:14px;top:40px;z-index:10;width:72px;height:72px;border-radius:50%;background:rgba(10,12,16,.82)}
+  #ring{position:absolute;inset:0;transition:transform .7s linear}
+  #ring b{position:absolute;font-size:15px;line-height:15px;width:20px;margin-left:-10px;left:50%;text-align:center}
+  #ring .n{top:2px;color:#ff5252}
+  #ring .s{bottom:2px;color:#aab}
+  #ring .e{left:auto;right:-2px;top:28px;margin:0;color:#aab}
+  #ring .w{left:2px;top:28px;margin:0;color:#aab}
+  #mid{position:absolute;left:50%;top:50%;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:20px solid #1e78ff;transform:translate(-7px,-11px)}
+  #dir{position:absolute;right:14px;top:118px;z-index:10;background:rgba(10,12,16,.82);border-radius:12px;padding:4px 10px;font-size:min(3.2vmin,22px);font-weight:700}
   #msg{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;text-align:center;background:#0b0d10;font-size:min(4vmin,28px);line-height:1.5;padding:24px}
-  .car{width:44px;height:44px;margin:-22px 0 0 -22px}
   .cam{background:#d32f2f;color:#fff;border-radius:10px;padding:4px 9px;font-size:15px;font-weight:700;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.5)}
   body.over #hud{background:rgba(160,20,20,.9)}
-  body.over #v{color:#fff}
 </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="view"><div id="wrap"><div id="map"></div></div></div>
 <div id="st"></div>
 <div id="hud"><div id="v">0</div><div id="u">km/h</div><div id="lim"></div></div>
+<div id="compass"><div id="ring"><b class="n">N</b><b class="e">E</b><b class="s">S</b><b class="w">W</b></div><div id="mid"></div></div>
+<div id="dir">북쪽</div>
 <div id="info"><div id="k">연결 중…</div><div id="d"></div><div id="r"></div></div>
-<div id="msg">처음 한 번 접속 코드가 필요합니다.<br>폰 앱의 설정 → 테슬라 지도 화면에 나온<br>짧은 주소(끝에 #코드)를 이 브라우저에서 여세요.</div>
+<div id="msg">처음 한 번 연결이 필요합니다.</div>
 
 <script>
-// 카카오 지도 JavaScript 키: 웹 주소(도메인)로 제한되는 공개용 키라서 페이지에 들어 있어도 됩니다.
 function $(i){return document.getElementById(i)}
 function param(n){var m=location.hash.replace(/^#/,'').split('&');for(var i=0;i<m.length;i++){var p=m[i].split('=');if(p[0]===n)return decodeURIComponent(p[1]||'')}return ''}
+// 카카오 지도 JavaScript 키: 웹 주소(도메인)로 제한되는 공개용 키라서 페이지에 들어 있어도 됩니다.
 // 주소에 &k=키 가 있으면 그 키를 쓴다(다른 사람이 자기 카카오 키로 쓸 수 있게).
 var KAKAO_KEY = param('k') || 'a3412d3b91b0eca2c0ffd4e396792c31';
-// 저장소 주소는 기본값을 페이지에 넣어 두었다(개인용). 주소 끝에 #비밀문자열 만 붙이면 열린다.
 var DEFAULT_DB = 'https://drivepilot-oj-live-default-rtdb.asia-southeast1.firebasedatabase.app';
 var raw = location.hash.replace(/^#/,'');
 if(raw==='reset'){ try{localStorage.clear()}catch(e){} raw=''; }      // 주소 끝에 #reset 을 붙이면 연결을 처음부터 다시 한다
 var DB = param('db'), ID = param('id');
-if(!DB && !ID && raw && raw.indexOf('=')<0) ID = raw;          // 짧은 주소: #비밀문자열
-try{                                                              // 한 번 열면 브라우저가 기억한다
+if(!DB && !ID && raw && raw.indexOf('=')<0) ID = raw;                // 예전 짧은 주소: #비밀문자열
+try{
   if(ID){ localStorage.setItem('dp_id', ID); if(DB) localStorage.setItem('dp_db', DB); }
   else { ID = localStorage.getItem('dp_id') || ''; DB = DB || localStorage.getItem('dp_db') || ''; }
 }catch(e){}
 DB = (DB || DEFAULT_DB).replace(/\/$/,'');
+
 // ---- 연결(페어링): 테슬라에서 긴 주소를 치지 않도록, 이 페이지가 코드를 보여 주고 폰이 그 코드를 입력한다 ----
 var CODE='', PAIRED=false;
 try{ PAIRED = localStorage.getItem('dp_paired')==='1'; CODE = localStorage.getItem('dp_code')||''; }catch(e){}
-if(param('id') || (raw && raw.indexOf('=')<0)){ PAIRED = true; try{localStorage.setItem('dp_paired','1')}catch(e){} }   // 예전 방식 주소
+if(param('id') || (raw && raw.indexOf('=')<0)){ PAIRED = true; try{localStorage.setItem('dp_paired','1')}catch(e){} }
 function rnd(n){ var a=new Uint32Array(n); (window.crypto||window.msCrypto).getRandomValues(a); return a }
 function genId(){ var c='abcdefghijklmnopqrstuvwxyz0123456789', r=rnd(16), t=''; for(var i=0;i<16;i++) t+=c[r[i]%36]; return t }
 function genCode(){ return String(10000000 + rnd(1)[0] % 90000000) }
 function showPair(){
   $('msg').style.display='flex';
-  $('msg').innerHTML = '<div>폰 앱 → 설정 → 테슬라 지도 화면 → <b>연결 코드</b>에<br>아래 숫자를 입력하고 "연결"을 누르세요<br><span style="display:inline-block;margin-top:2vmin;font-size:min(13vmin,100px);font-weight:700;letter-spacing:.08em">'+CODE.replace(/^(\d{4})(\d{4})$/,'$1 $2')+'</span></div>';
+  $('msg').innerHTML = '<div>폰 앱 → 메인 화면 → <b>테슬라 화면 연결</b>에<br>아래 숫자를 입력하고 "연결"을 누르세요<br><span style="display:inline-block;margin-top:2vmin;font-size:min(13vmin,100px);font-weight:700;letter-spacing:.08em">'+CODE.replace(/^(\d{4})(\d{4})$/,'$1 $2')+'</span></div>';
 }
 function startPairing(){
   if(!ID){ ID = genId(); try{ localStorage.setItem('dp_id', ID) }catch(e){} }
@@ -66,7 +77,39 @@ function startPairing(){
 }
 if(PAIRED){ $('msg').style.display='none'; } else { startPairing(); }
 
+// ---- 지도: 진행 방향이 위로 오게 돌리고(헤딩업), 방위를 표시한다. 방위 원을 누르면 북쪽 위로 전환 ----
 var state = {}, last = 0, map, car, cam, polyline;
+var headingUp = true; try{ headingUp = localStorage.getItem('dp_hu') !== '0'; }catch(e){}
+var rot = 0, curPos = null;
+var DIRS = ['북','북동','동','남동','남','남서','서','북서'];
+
+function layout(){
+  var S = Math.ceil(Math.max(innerWidth, innerHeight) * 2.1), w = $('wrap');
+  w.style.width = S+'px'; w.style.height = S+'px';
+  w.style.left = (innerWidth/2 - S/2)+'px';
+  w.style.top = (innerHeight*0.62 - S/2)+'px';     // 차 위치를 화면 아래쪽 3/5 지점에 둔다(앞이 더 많이 보이게)
+  if(map){ map.relayout(); if(curPos) map.setCenter(curPos); }
+}
+function applyRot(){
+  $('wrap').style.transform = 'rotate('+(-rot)+'deg)';
+  $('ring').style.transform = 'rotate('+(-rot)+'deg)';
+  var t = $('camtag'); if(t) t.style.transform = 'rotate('+rot+'deg)';
+}
+function setHeading(b){
+  if(b<0) return;
+  $('dir').textContent = DIRS[Math.round(b/45)%8] + '쪽';
+  var svg = $('carsvg');
+  if(!headingUp){ rot = 0; if(svg) svg.style.transform = 'rotate('+b+'deg)'; applyRot(); return; }
+  var cur = ((rot%360)+360)%360, d = ((b - cur + 540) % 360) - 180;
+  if(Math.abs(d) < 2) return;                      // 작은 흔들림은 무시
+  rot += d; applyRot();
+  if(svg) svg.style.transform = 'rotate(0deg)';
+}
+$('compass').onclick = function(){
+  headingUp = !headingUp; try{ localStorage.setItem('dp_hu', headingUp?'1':'0') }catch(e){}
+  if(!headingUp){ rot = 0; applyRot(); } else if(state.b>=0){ rot = state.b; applyRot(); }
+  if(state.b>=0) setHeading(state.b);
+};
 
 function loadMap(){
   var s = document.createElement('script');
@@ -75,16 +118,17 @@ function loadMap(){
   s.onerror = function(){ $('k').textContent='지도를 불러오지 못했습니다' };
   document.head.appendChild(s);
 }
-
 function initMap(){
+  layout();
   map = new kakao.maps.Map($('map'), {center:new kakao.maps.LatLng(37.5665,126.9780), level:4});
   car = new kakao.maps.CustomOverlay({position:map.getCenter(), yAnchor:.5, xAnchor:.5, zIndex:5,
-        content:'<svg class="car" id="carsvg" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="rgba(30,120,255,.25)"/><path d="M22 6 L33 36 L22 30 L11 36 Z" fill="#1e78ff" stroke="#fff" stroke-width="2.5"/></svg>'});
+        content:'<svg id="carsvg" width="44" height="44" viewBox="0 0 44 44" style="transition:transform .7s linear"><circle cx="22" cy="22" r="20" fill="rgba(30,120,255,.25)"/><path d="M22 6 L33 36 L22 30 L11 36 Z" fill="#1e78ff" stroke="#fff" stroke-width="2.5"/></svg>'});
   car.setMap(map);
   cam = new kakao.maps.CustomOverlay({position:map.getCenter(), yAnchor:1.3, zIndex:4, content:'<div class="cam" id="camtag">단속</div>'});
   polyline = new kakao.maps.Polyline({strokeWeight:4, strokeColor:'#d32f2f', strokeOpacity:.8});
   render();
 }
+window.addEventListener('resize', layout);
 
 function levelFor(v){ return v<25?3 : v<60?4 : v<90?5 : 6 }
 function fmt(m){ return m>=1000 ? (m/1000).toFixed(1)+'km' : m+'m' }
@@ -106,14 +150,14 @@ function render(){
   $('k').textContent = s.kind ? s.kind : (s.road || '주변 단속 없음');
   $('d').textContent = (s.kind && s.kind.indexOf('구간')>=0 && s.avg>=0) ? ('평균 '+s.avg) : ((s.kind && s.d>=0) ? fmt(s.d) : '');
   $('r').textContent = s.kind ? (s.road||'') : '';
+  if(s.b>=0 && s.v>=3) setHeading(s.b);
   if(!map || !s.lat) return;
-  var pos = new kakao.maps.LatLng(s.lat, s.lon);
+  var pos = new kakao.maps.LatLng(s.lat, s.lon); curPos = pos;
   car.setPosition(pos);
-  var svg = $('carsvg'); if(svg && s.b>=0) svg.style.transform = 'rotate('+s.b+'deg)';
   if(s.tl){
     var tp = new kakao.maps.LatLng(s.tl, s.tn);
     cam.setPosition(tp); cam.setMap(map);
-    var t = $('camtag'); if(t) t.textContent = (s.kind||'단속') + (s.lim>0 ? ' '+s.lim : '');
+    var t = $('camtag'); if(t){ t.textContent = (s.kind||'단속') + (s.lim>0 ? ' '+s.lim : ''); t.style.transform = 'rotate('+rot+'deg)'; }
     polyline.setPath([pos, tp]); polyline.setMap(map);
   } else { cam.setMap(null); polyline.setMap(null); }
   var lv = levelFor(s.v);
@@ -147,6 +191,7 @@ function poll(){
 }
 setInterval(render, 2000);   // 데이터가 끊겨도 '연결 끊김' 표시가 갱신되도록
 
+layout();
 if(DB && ID){ loadMap(); stream(); }
 </script>
 </body>
