@@ -56,7 +56,7 @@ function genId(){ var c='abcdefghijklmnopqrstuvwxyz0123456789', r=rnd(16), t='';
 function genCode(){ return String(10000000 + rnd(1)[0] % 90000000) }
 function showPair(){
   $('msg').style.display='flex';
-  $('msg').innerHTML = '폰 앱 → 설정 → 테슬라 지도 화면 → <b>연결 코드</b>에<br>아래 숫자를 입력하고 "연결"을 누르세요<br><span style="font-size:min(13vmin,100px);font-weight:700;letter-spacing:.08em">'+CODE.replace(/^(\d{4})(\d{4})$/,'$1 $2')+'</span>';
+  $('msg').innerHTML = '<div>폰 앱 → 설정 → 테슬라 지도 화면 → <b>연결 코드</b>에<br>아래 숫자를 입력하고 "연결"을 누르세요<br><span style="display:inline-block;margin-top:2vmin;font-size:min(13vmin,100px);font-weight:700;letter-spacing:.08em">'+CODE.replace(/^(\d{4})(\d{4})$/,'$1 $2')+'</span></div>';
 }
 function startPairing(){
   if(!ID){ ID = genId(); try{ localStorage.setItem('dp_id', ID) }catch(e){} }
