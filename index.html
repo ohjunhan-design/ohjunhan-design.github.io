@@ -84,7 +84,7 @@ var rot = 0, curPos = null;
 var DIRS = ['북','북동','동','남동','남','남서','서','북서'];
 
 function layout(){
-  var S = Math.ceil(Math.max(innerWidth, innerHeight) * 2.1), w = $('wrap');
+  var S = Math.ceil(2 * Math.hypot(innerWidth/2, innerHeight*0.62)) + 40, w = $('wrap');   // 회전해도 화면 모서리가 비지 않을 만큼만
   w.style.width = S+'px'; w.style.height = S+'px';
   w.style.left = (innerWidth/2 - S/2)+'px';
   w.style.top = (innerHeight*0.62 - S/2)+'px';     // 차 위치를 화면 아래쪽 3/5 지점에 둔다(앞이 더 많이 보이게)
