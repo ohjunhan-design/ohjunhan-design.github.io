@@ -83,7 +83,7 @@ if(PAIRED){ $('msg').style.display='none'; } else { startPairing(); }
 
 // ---- 지도: 진행 방향이 위로 오게 돌리고(헤딩업), 방위를 표시한다. 방위 원을 누르면 북쪽 위로 전환 ----
 var state = {}, last = 0, map, car, cam, polyline;
-var headingUp = true; try{ headingUp = localStorage.getItem('dp_hu') !== '0'; }catch(e){}
+var headingUp = true;                              // 진행 방향이 항상 위(북쪽 위 전환은 없앴다)
 var rot = 0, curPos = null;
 var DIRS = ['북','북동','동','남동','남','남서','서','북서'];
 
@@ -142,7 +142,7 @@ function frame(ts){
     }
     var k = 1 - Math.exp(-dt/0.5); disp.lat += (tl-disp.lat)*k; disp.lon += (tn-disp.lon)*k;
   }
-  if(fix.b >= 0 && fix.v >= 3){
+  if(fix.b >= 0 && (fix.v >= 3 || bDisp < 0)){      // 멈춰 있어도 처음 한 번은 마지막 방향으로 맞춘다
     if(bDisp < 0) bDisp = fix.b;
     else { var d = ((fix.b - bDisp + 540) % 360) - 180; bDisp = (bDisp + d*(1 - Math.exp(-dt/0.35)) + 360) % 360; }
   }
@@ -157,11 +157,6 @@ $('u').onclick = function(){                       // km/h 글자를 누르면 �
 };
 if(lead) $('u').textContent = 'km/h  +' + lead + '초';
 
-$('compass').onclick = function(){
-  headingUp = !headingUp; try{ localStorage.setItem('dp_hu', headingUp?'1':'0') }catch(e){}
-  if(!headingUp){ rot = 0; applyRot(); } else if(state.b>=0){ rot = state.b; applyRot(); }
-  if(state.b>=0) setHeading(state.b);
-};
 
 function loadMap(){
   var s = document.createElement('script');
