@@ -7,7 +7,7 @@
 <style>
   html,body{margin:0;height:100%;background:#0b0d10;color:#fff;font-family:-apple-system,"Noto Sans KR",sans-serif;overflow:hidden}
   #view{position:absolute;inset:0;overflow:hidden}
-  #wrap{position:absolute;transform-origin:50% 50%;transition:transform .7s linear}
+  #wrap{position:absolute;transform-origin:50% 50%;will-change:transform}
   #map{position:absolute;inset:0}
   #hud{position:absolute;left:14px;top:14px;z-index:10;background:rgba(10,12,16,.82);border-radius:18px;padding:12px 18px 10px;min-width:150px;text-align:center}
   #v{font-size:min(15vmin,120px);font-weight:700;line-height:1}
@@ -19,7 +19,7 @@
   #r{font-size:min(2.8vmin,20px);color:#aab}
   #st{position:absolute;right:14px;top:14px;z-index:10;width:14px;height:14px;border-radius:50%;background:#555}
   #compass{position:absolute;right:14px;top:40px;z-index:10;width:72px;height:72px;border-radius:50%;background:rgba(10,12,16,.82)}
-  #ring{position:absolute;inset:0;transition:transform .7s linear}
+  #ring{position:absolute;inset:0}
   #ring b{position:absolute;font-size:15px;line-height:15px;width:20px;margin-left:-10px;left:50%;text-align:center}
   #ring .n{top:2px;color:#ff5252}
   #ring .s{bottom:2px;color:#aab}
@@ -59,8 +59,8 @@ try{
 DB = (DB || DEFAULT_DB).replace(/\/$/,'');
 
 // ---- 연결(페어링): 테슬라에서 긴 주소를 치지 않도록, 이 페이지가 코드를 보여 주고 폰이 그 코드를 입력한다 ----
-var CODE='', PAIRED=false;
-try{ PAIRED = localStorage.getItem('dp_paired')==='1'; CODE = localStorage.getItem('dp_code')||''; }catch(e){}
+var CODE='', CODE_T=0, PAIRED=false;
+try{ PAIRED = localStorage.getItem('dp_paired')==='1'; CODE = localStorage.getItem('dp_code')||''; CODE_T = +localStorage.getItem('dp_code_t')||0; }catch(e){}
 if(param('id') || (raw && raw.indexOf('=')<0)){ PAIRED = true; try{localStorage.setItem('dp_paired','1')}catch(e){} }
 function rnd(n){ var a=new Uint32Array(n); (window.crypto||window.msCrypto).getRandomValues(a); return a }
 function genId(){ var c='abcdefghijklmnopqrstuvwxyz0123456789', r=rnd(16), t=''; for(var i=0;i<16;i++) t+=c[r[i]%36]; return t }
@@ -71,10 +71,14 @@ function showPair(){
 }
 function startPairing(){
   if(!ID){ ID = genId(); try{ localStorage.setItem('dp_id', ID) }catch(e){} }
-  if(!CODE){ CODE = genCode(); try{ localStorage.setItem('dp_code', CODE) }catch(e){} }
-  fetch(DB+'/pair/'+CODE+'.json', {method:'PUT', body:JSON.stringify({id:ID, t:Date.now()})}).catch(function(){});
+  if(CODE && Date.now()-CODE_T > 8*60000){       // 오래된 코드는 지우고 새로 만든다(쓰다 만 코드가 남지 않게)
+    fetch(DB+'/pair/'+CODE+'.json', {method:'DELETE'}).catch(function(){}); CODE='';
+  }
+  if(!CODE){ CODE = genCode(); CODE_T = Date.now(); try{ localStorage.setItem('dp_code', CODE); localStorage.setItem('dp_code_t', String(CODE_T)) }catch(e){} }
+  fetch(DB+'/pair/'+CODE+'.json', {method:'PUT', body:JSON.stringify({id:ID, t:CODE_T})}).catch(function(){});
   showPair();
 }
+setInterval(function(){ if(!PAIRED) startPairing() }, 60000);
 if(PAIRED){ $('msg').style.display='none'; } else { startPairing(); }
 
 // ---- 지도: 진행 방향이 위로 오게 돌리고(헤딩업), 방위를 표시한다. 방위 원을 누르면 북쪽 위로 전환 ----
@@ -101,10 +105,58 @@ function setHeading(b){
   var svg = $('carsvg');
   if(!headingUp){ rot = 0; if(svg) svg.style.transform = 'rotate('+b+'deg)'; applyRot(); return; }
   var cur = ((rot%360)+360)%360, d = ((b - cur + 540) % 360) - 180;
-  if(Math.abs(d) < 2) return;                      // 작은 흔들림은 무시
-  rot += d; applyRot();
+  rot += d; applyRot();                            // 매 프레임 조금씩 따라가므로 360도 경계에서 한 바퀴 돌지 않는다
   if(svg) svg.style.transform = 'rotate(0deg)';
 }
+
+// ---- 부드러운 움직임: 위치는 1초에 한 번 오지만 화면은 매 프레임 그린다 ----
+// 1) 받은 위치는 이미 지난 것이므로(GPS 계산·통신 지연) 속도×경과시간만큼 앞으로 밀어 그린다(최대 2.5초).
+// 2) 그린 위치는 목표 위치를 부드럽게 따라가고(0.3초), 방향도 같은 방식으로(0.35초) 따라간다.
+var fix = null, disp = null, bDisp = -1, lastT = 0, lastFrame = 0, offs = [], lvl = 0;
+var lead = 0; try{ lead = parseFloat(localStorage.getItem('dp_lead'))||0 }catch(e){}
+function onFix(s){
+  if(!s.lat) return;
+  var now = Date.now(), extra = 0;
+  if(s.t>0){ offs.push(now - s.t); if(offs.length>30) offs.shift(); extra = Math.max(0, Math.min(3000, (now - s.t) - Math.min.apply(null, offs))); }
+  var v = (s.vm>=0) ? s.vm : (s.v||0)/3.6, b = (s.bf>=0) ? s.bf : s.b;
+  fix = {lat:s.lat, lon:s.lon, b:b, v:v, at: now - ((s.a||0) + 400 + extra)};   // 400ms: 통신 최소 지연 가정
+}
+function metersBetween(lat, lon, p){ return Math.hypot((lat-p.lat)*110574, (lon-p.lon)*111320*Math.cos(lat*Math.PI/180)) }
+function frame(ts){
+  requestAnimationFrame(frame);
+  if(ts - lastFrame < 40) return;                  // 초당 약 25번이면 충분하다
+  var dt = Math.min((ts - lastFrame)/1000, 0.25); lastFrame = ts;
+  if(!fix || !map) return;
+  if(!(state.on===1 && Date.now()-last < 8000)) return;
+  var ahead = Math.min(Math.max(Date.now() - fix.at + lead*1000, 0), 2500)/1000;
+  var tl = fix.lat, tn = fix.lon;
+  if(fix.v >= 1.5 && fix.b >= 0){
+    var dist = fix.v*ahead, r = fix.b*Math.PI/180;
+    tl += dist*Math.cos(r)/110574; tn += dist*Math.sin(r)/(111320*Math.cos(fix.lat*Math.PI/180));
+  }
+  if(!disp || metersBetween(tl, tn, disp) > 80 + fix.v*3){ disp = {lat:tl, lon:tn}; }
+  else {
+    if(fix.v >= 1.5 && fix.b >= 0){                // 같은 속도로 함께 달리고, 어긋난 만큼만 서서히 맞춘다(안 그러면 늘 한 걸음 뒤처진다)
+      var r2 = fix.b*Math.PI/180, st = fix.v*dt;
+      disp.lat += st*Math.cos(r2)/110574; disp.lon += st*Math.sin(r2)/(111320*Math.cos(fix.lat*Math.PI/180));
+    }
+    var k = 1 - Math.exp(-dt/0.5); disp.lat += (tl-disp.lat)*k; disp.lon += (tn-disp.lon)*k;
+  }
+  if(fix.b >= 0 && fix.v >= 3){
+    if(bDisp < 0) bDisp = fix.b;
+    else { var d = ((fix.b - bDisp + 540) % 360) - 180; bDisp = (bDisp + d*(1 - Math.exp(-dt/0.35)) + 360) % 360; }
+  }
+  var pos = new kakao.maps.LatLng(disp.lat, disp.lon); curPos = pos;
+  car.setPosition(pos); map.setCenter(pos);
+  if(bDisp >= 0) setHeading(bDisp);
+}
+requestAnimationFrame(frame);
+$('u').onclick = function(){                       // km/h 글자를 누르면 앞당김(0→0.5→1→1.5→2초)을 바꾼다. 차가 늘 뒤처져 보이면 올린다.
+  lead = lead >= 2 ? 0 : lead + 0.5; try{ localStorage.setItem('dp_lead', String(lead)) }catch(e){}
+  $('u').textContent = 'km/h' + (lead ? '  +' + lead + '초' : '');
+};
+if(lead) $('u').textContent = 'km/h  +' + lead + '초';
+
 $('compass').onclick = function(){
   headingUp = !headingUp; try{ localStorage.setItem('dp_hu', headingUp?'1':'0') }catch(e){}
   if(!headingUp){ rot = 0; applyRot(); } else if(state.b>=0){ rot = state.b; applyRot(); }
@@ -122,7 +174,7 @@ function initMap(){
   layout();
   map = new kakao.maps.Map($('map'), {center:new kakao.maps.LatLng(37.5665,126.9780), level:4});
   car = new kakao.maps.CustomOverlay({position:map.getCenter(), yAnchor:.5, xAnchor:.5, zIndex:5,
-        content:'<svg id="carsvg" width="44" height="44" viewBox="0 0 44 44" style="transition:transform .7s linear"><circle cx="22" cy="22" r="20" fill="rgba(30,120,255,.25)"/><path d="M22 6 L33 36 L22 30 L11 36 Z" fill="#1e78ff" stroke="#fff" stroke-width="2.5"/></svg>'});
+        content:'<svg id="carsvg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="rgba(30,120,255,.25)"/><path d="M22 6 L33 36 L22 30 L11 36 Z" fill="#1e78ff" stroke="#fff" stroke-width="2.5"/></svg>'});
   car.setMap(map);
   cam = new kakao.maps.CustomOverlay({position:map.getCenter(), yAnchor:1.3, zIndex:4, content:'<div class="cam" id="camtag">단속</div>'});
   polyline = new kakao.maps.Polyline({strokeWeight:4, strokeColor:'#d32f2f', strokeOpacity:.8});
@@ -130,7 +182,12 @@ function initMap(){
 }
 window.addEventListener('resize', layout);
 
-function levelFor(v){ return v<25?3 : v<60?4 : v<90?5 : 6 }
+function levelFor(v){                              // 경계 근처에서 확대·축소가 왔다 갔다 하지 않게 여유(히스테리시스)를 둔다
+  var b = [25, 60, 90], t = lvl || 3;
+  while(t < 6 && v > b[t-3] + 4) t++;
+  while(t > 3 && v < b[t-4] - 4) t--;
+  return lvl = t;
+}
 function fmt(m){ return m>=1000 ? (m/1000).toFixed(1)+'km' : m+'m' }
 
 function render(){
@@ -150,10 +207,9 @@ function render(){
   $('k').textContent = s.kind ? s.kind : (s.road || '주변 단속 없음');
   $('d').textContent = (s.kind && s.kind.indexOf('구간')>=0 && s.avg>=0) ? ('평균 '+s.avg) : ((s.kind && s.d>=0) ? fmt(s.d) : '');
   $('r').textContent = s.kind ? (s.road||'') : '';
-  if(s.b>=0 && s.v>=3) setHeading(s.b);
   if(!map || !s.lat) return;
-  var pos = new kakao.maps.LatLng(s.lat, s.lon); curPos = pos;
-  car.setPosition(pos);
+  var pos = curPos || new kakao.maps.LatLng(s.lat, s.lon);
+  if(!curPos){ curPos = pos; car.setPosition(pos); map.setCenter(pos); }
   if(s.tl){
     var tp = new kakao.maps.LatLng(s.tl, s.tn);
     cam.setPosition(tp); cam.setMap(map);
@@ -162,7 +218,6 @@ function render(){
   } else { cam.setMap(null); polyline.setMap(null); }
   var lv = levelFor(s.v);
   if(map.getLevel()!==lv) map.setLevel(lv);
-  map.setCenter(pos);
 }
 
 // ---- 실시간 데이터: 파이어베이스 REST 스트리밍(EventSource), 안 되면 1.5초마다 직접 읽기 ----
@@ -170,6 +225,7 @@ function apply(path, data){
   if(path==='/' ){ state = (data && typeof data==='object') ? data : {}; }
   else { var parts = path.replace(/^\//,'').split('/'); var o = state; for(var i=0;i<parts.length-1;i++){ o[parts[i]] = o[parts[i]]||{}; o = o[parts[i]] } o[parts[parts.length-1]] = data; }
   last = Date.now();
+  if(state.t !== lastT){ lastT = state.t; onFix(state); }
   if(!PAIRED && state && (state.on===1 || state.on===0)){
     PAIRED = true; try{ localStorage.setItem('dp_paired','1') }catch(e){}
     $('msg').style.display='none';
@@ -186,7 +242,7 @@ function stream(){
 }
 function poll(){
   var url = DB + '/live/' + ID + '.json?t=' + Date.now();
-  fetch(url, {cache:'no-store'}).then(function(r){return r.json()}).then(function(j){ if(j){ state=j; last=Date.now(); } render(); })
+  fetch(url, {cache:'no-store'}).then(function(r){return r.json()}).then(function(j){ if(j){ state=j; last=Date.now(); if(state.t !== lastT){ lastT = state.t; onFix(state); } } render(); })
    .catch(function(){ render() }).then(function(){ setTimeout(poll, 1500) });
 }
 setInterval(render, 2000);   // 데이터가 끊겨도 '연결 끊김' 표시가 갱신되도록
