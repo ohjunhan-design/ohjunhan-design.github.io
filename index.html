@@ -6,7 +6,7 @@
 <title>DrivePilot</title>
 <style>
   html,body{margin:0;height:100%;background:#0b0d10;color:#fff;font-family:-apple-system,"Noto Sans KR",sans-serif;overflow:hidden}
-  #view{position:absolute;inset:0;overflow:hidden}
+  #view{position:absolute;inset:0;overflow:hidden;touch-action:none}
   #wrap{position:absolute;transform-origin:50% 50%;will-change:transform}
   #map{position:absolute;inset:0}
   #hud{position:absolute;left:14px;top:14px;z-index:10;background:rgba(10,12,16,.82);border-radius:18px;padding:12px 18px 10px;min-width:150px;text-align:center}
@@ -27,6 +27,9 @@
   #ring .w{left:2px;top:28px;margin:0;color:#aab}
   #mid{position:absolute;left:50%;top:50%;width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:20px solid #1e78ff;transform:translate(-7px,-11px)}
   #dir{position:absolute;right:14px;top:118px;z-index:10;background:rgba(10,12,16,.82);border-radius:12px;padding:4px 10px;font-size:min(3.2vmin,22px);font-weight:700}
+  .zb{position:absolute;right:14px;z-index:10;width:64px;height:64px;border-radius:16px;background:rgba(10,12,16,.82);color:#fff;font-size:40px;line-height:64px;text-align:center;user-select:none;-webkit-user-select:none}
+  #zin{top:158px} #zout{top:230px}
+  #here{display:none;position:absolute;right:14px;top:302px;z-index:10;padding:0 14px;height:56px;line-height:56px;border-radius:16px;background:#1e78ff;color:#fff;font-weight:700;font-size:22px;user-select:none}
   #msg{position:absolute;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;text-align:center;background:#0b0d10;font-size:min(4vmin,28px);line-height:1.5;padding:24px}
   .cam{background:#d32f2f;color:#fff;border-radius:10px;padding:4px 9px;font-size:15px;font-weight:700;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.5)}
   body.over #hud{background:rgba(160,20,20,.9)}
@@ -38,6 +41,7 @@
 <div id="hud"><div id="v">0</div><div id="u">km/h</div><div id="lim"></div></div>
 <div id="compass"><div id="ring"><b class="n">N</b><b class="e">E</b><b class="s">S</b><b class="w">W</b></div><div id="mid"></div></div>
 <div id="dir">북쪽</div>
+<div id="zin" class="zb">+</div><div id="zout" class="zb">−</div><div id="here">내 위치</div>
 <div id="info"><div id="k">연결 중…</div><div id="d"></div><div id="r"></div></div>
 <div id="msg">처음 한 번 연결이 필요합니다.</div>
 
@@ -147,10 +151,46 @@ function frame(ts){
     else { var d = ((fix.b - bDisp + 540) % 360) - 180; bDisp = (bDisp + d*(1 - Math.exp(-dt/0.35)) + 360) % 360; }
   }
   var pos = new kakao.maps.LatLng(disp.lat, disp.lon); curPos = pos;
-  car.setPosition(pos); map.setCenter(pos);
+  car.setPosition(pos); if(!manual) map.setCenter(pos);
   if(bDisp >= 0) setHeading(bDisp);
 }
 requestAnimationFrame(frame);
+
+// ---- 손가락으로 보기: 한 손가락 끌기=이동, 두 손가락 벌리기/모으기=확대/축소, +/− 버튼, '내 위치'로 돌아오기(20초 만지지 않으면 자동 복귀) ----
+var manual = false, manualAt = 0, ptr = {}, pinch0 = 0;
+function enterManual(){ manual = true; manualAt = Date.now(); $('here').style.display = 'block'; }
+function exitManual(){ manual = false; lvl = 0; $('here').style.display = 'none'; if(map && curPos) map.setCenter(curPos); }
+setInterval(function(){ if(manual && Date.now() - manualAt > 20000) exitManual(); }, 1000);
+function zoomBy(n){ if(!map) return; enterManual(); map.setLevel(Math.max(1, Math.min(12, map.getLevel() + n)), {animate:true}); }
+function panBy(dx, dy){                            // 화면 방향의 끌기를, 회전한 지도 기준 방향으로 바꿔 중심을 옮긴다
+  var t = rot*Math.PI/180, c = Math.cos(t), s = Math.sin(t), lx = dx*c - dy*s, ly = dx*s + dy*c;
+  var pr = map.getProjection(), cp = pr.containerPointFromCoords(map.getCenter());
+  map.setCenter(pr.coordsFromContainerPoint(new kakao.maps.Point(cp.x - lx, cp.y - ly)));
+}
+function ptrDist(){ var k = Object.keys(ptr); return Math.hypot(ptr[k[0]].x - ptr[k[1]].x, ptr[k[0]].y - ptr[k[1]].y) }
+var V = $('view');
+V.addEventListener('pointerdown', function(e){
+  if(!map) return;
+  try{ V.setPointerCapture(e.pointerId) }catch(x){}
+  ptr[e.pointerId] = {x:e.clientX, y:e.clientY}; enterManual();
+  if(Object.keys(ptr).length === 2) pinch0 = ptrDist();
+});
+V.addEventListener('pointermove', function(e){
+  var p = ptr[e.pointerId]; if(!p || !map) return;
+  var dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; manualAt = Date.now();
+  var n = Object.keys(ptr).length;
+  if(n === 1) panBy(dx, dy);
+  else if(n === 2){
+    var d = ptrDist();
+    if(d > pinch0*1.5){ zoomBy(-1); pinch0 = d }          // 벌리면 확대(레벨 숫자는 작아진다)
+    else if(d < pinch0/1.5){ zoomBy(1); pinch0 = d }
+  }
+});
+function endPtr(e){ delete ptr[e.pointerId] }
+V.addEventListener('pointerup', endPtr); V.addEventListener('pointercancel', endPtr);
+$('zin').onclick = function(){ zoomBy(-1) }; $('zout').onclick = function(){ zoomBy(1) };
+$('here').onclick = exitManual;
+
 $('u').onclick = function(){                       // km/h 글자를 누르면 앞당김(0→0.5→1→1.5→2초)을 바꾼다. 차가 늘 뒤처져 보이면 올린다.
   lead = lead >= 2 ? 0 : lead + 0.5; try{ localStorage.setItem('dp_lead', String(lead)) }catch(e){}
   $('u').textContent = 'km/h' + (lead ? '  +' + lead + '초' : '');
@@ -171,6 +211,7 @@ function initMap(){
   car = new kakao.maps.CustomOverlay({position:map.getCenter(), yAnchor:.5, xAnchor:.5, zIndex:5,
         content:'<svg id="carsvg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="rgba(30,120,255,.25)"/><path d="M22 6 L33 36 L22 30 L11 36 Z" fill="#1e78ff" stroke="#fff" stroke-width="2.5"/></svg>'});
   car.setMap(map);
+  try{ map.setDraggable(false); map.setZoomable(false); }catch(e){}     // 회전한 지도에서는 기본 손동작의 방향이 틀어지므로 아래에서 직접 처리한다
   cam = new kakao.maps.CustomOverlay({position:map.getCenter(), yAnchor:1.3, zIndex:4, content:'<div class="cam" id="camtag">단속</div>'});
   polyline = new kakao.maps.Polyline({strokeWeight:4, strokeColor:'#d32f2f', strokeOpacity:.8});
   render();
@@ -185,6 +226,35 @@ function levelFor(v){                              // 경계 근처에서 확대
 }
 function fmt(m){ return m>=1000 ? (m/1000).toFixed(1)+'km' : m+'m' }
 
+// ---- 곡선 구간: 폰이 cv0, cv1… 조각으로 보내 준다("심각도 n|c" + 위치/변화량). 주황=완만한 곡선, 빨강=급한 곡선 ----
+var cvSig = '', cvLines = [];
+function clearCurves(){ for(var i=0;i<cvLines.length;i++) cvLines[i].setMap(null); cvLines = []; cvSig = ''; }
+function drawCurves(){
+  var parts = [], i = 0, sig = '';
+  while(state['cv'+i]){ parts.push(state['cv'+i]); sig += state['cv'+i] + '|'; i++; }
+  if(sig === cvSig) return;
+  cvSig = sig;
+  for(var k=0;k<cvLines.length;k++) cvLines[k].setMap(null);
+  cvLines = [];
+  var cur = null, la = 0, lo = 0, sev = 0;
+  function flush(){ if(cur && cur.length>1){ var pl = new kakao.maps.Polyline({path:cur, strokeWeight:8, strokeColor: sev ? '#ff2d2d' : '#ff9800', strokeOpacity:.85, zIndex:2}); pl.setMap(map); cvLines.push(pl); } cur = null; }
+  for(var n=0;n<parts.length;n++){
+    var c = parts[n], t = c.slice(2).split(';');
+    if(c.charAt(1) === 'n'){
+      flush(); sev = +c.charAt(0);
+      var ab = t[0].split(','); la = +ab[0]; lo = +ab[1]; cur = [new kakao.maps.LatLng(la/1e6, lo/1e6)];
+      t = t.slice(1);
+    }
+    if(!cur) continue;
+    for(var j=0;j<t.length;j++){
+      if(!t[j]) continue;
+      var d = t[j].split(','); la += (+d[0])*10; lo += (+d[1])*10;
+      cur.push(new kakao.maps.LatLng(la/1e6, lo/1e6));
+    }
+  }
+  flush();
+}
+
 function render(){
   var s = state, alive = s.on===1 && (Date.now()-last) < 8000;
   $('st').style.background = (Date.now()-last)<8000 ? '#3dd68c' : '#d32f2f';
@@ -195,6 +265,7 @@ function render(){
     $('k').textContent = s.on===0 && last ? '대기 중' : '연결 중…';
     $('d').textContent = ''; $('r').textContent = '';
     if(cam) cam.setMap(null); if(polyline) polyline.setMap(null);
+    if(map) clearCurves();
     return;
   }
   $('v').textContent = s.v;
@@ -211,8 +282,9 @@ function render(){
     var t = $('camtag'); if(t){ t.textContent = (s.kind||'단속') + (s.lim>0 ? ' '+s.lim : ''); t.style.transform = 'rotate('+rot+'deg)'; }
     polyline.setPath([pos, tp]); polyline.setMap(map);
   } else { cam.setMap(null); polyline.setMap(null); }
+  drawCurves();
   var lv = levelFor(s.v);
-  if(map.getLevel()!==lv) map.setLevel(lv);
+  if(!manual && map.getLevel()!==lv) map.setLevel(lv);
 }
 
 // ---- 실시간 데이터: 파이어베이스 REST 스트리밍(EventSource), 안 되면 1.5초마다 직접 읽기 ----
